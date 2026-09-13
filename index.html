@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>画布 · Canvas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Fraunces:opsz,wght@9..144,500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --pink: #f9e9ec;
+    --pink-deep: #f3dde2;
+    --dot: #cdc3c6;
+    --ink: #2b2530;
+    --ink-soft: #6f6570;
+    --card: #fffdfc;
+    --line: #e7dadd;
+    --accent: #b6536b;
+    --accent-soft: #e9c9d1;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    overflow:hidden; overscroll-behavior:none;
+    font-family:'Inter', system-ui, sans-serif;
+    color:var(--ink);
+    -webkit-user-select:none; user-select:none;
+  }
+
+  #bg{
+    position:fixed; inset:0;
+    background-color:var(--pink);
+    background-image: radial-gradient(var(--dot) 1.6px, transparent 1.6px);
+    background-size: 26px 26px;
+    background-position: 0px 0px;
+    z-index:0;
+  }
+  #bg::after{
+    content:"";
+    position:absolute; inset:0;
+    background: radial-gradient(ellipse at 30% 20%, rgba(255,255,255,0.35), transparent 60%);
+    pointer-events:none;
+  }
+
+  #stage{ position:fixed; inset:0; z-index:1; overflow:hidden; cursor: grab; }
+  #stage.panning{ cursor:grabbing; }
+  #world{ position:absolute; left:0; top:0; width:0; height:0; transform-origin: 0 0; will-change: transform; }
+
+  .node{ position:absolute; cursor:default; }
+  .node.dragging{ cursor:grabbing; }
+
+  .text-node{
+    min-width:40px; min-height:24px; padding:6px 8px;
+    font-size:18px; line-height:1.4; color:var(--ink); outline:none;
+    white-space:pre-wrap; word-break:break-word;
+    border-radius:6px; border:1.5px solid transparent;
+  }
+  .text-node:empty::before{ content: attr(data-placeholder); color: #b9a9ae; }
+
+  .img-node{
+    padding:8px; background:var(--card); border-radius:12px;
+    box-shadow: 0 2px 10px rgba(90, 40, 55, 0.10);
+    border:1.5px solid transparent;
+  }
+  .img-node img{ display:block; width:100%; height:100%; object-fit:cover; border-radius:6px; pointer-events:none; background:#f1e6e8; }
+  .caption{ margin-top:6px; font-size:13px; color:var(--ink-soft); outline:none; padding:2px 3px; border-radius:4px; }
+  .caption:empty::before{ content: attr(data-placeholder); color:#c9bcc0; }
+
+  .node.selected > .text-node,
+  .node.selected.img-node{
+    border-color: var(--accent-soft) !important;
+    box-shadow: 0 0 0 3px rgba(182,83,107,0.12), 0 2px 10px rgba(90,40,55,0.10);
+  }
+
+  .handle{
+    position:absolute; width:12px; height:12px; right:-6px; bottom:-6px;
+    background:var(--accent); border:2px solid white; border-radius:50%;
+    cursor:nwse-resize; display:none;
+  }
+  .node.selected .handle{ display:block; }
+
+  .del-btn{
+    position:absolute; top:-12px; right:-12px; width:22px; height:22px;
+    border-radius:50%; background:white; border:1.5px solid var(--line);
+    color:var(--ink-soft); font-size:13px; line-height:1; display:none;
+    align-items:center; justify-content:center; cursor:pointer;
+  }
+  .node.selected .del-btn{ display:flex; }
+  .del-btn:hover{ background:#fff0f2; color:var(--accent); border-color:var(--accent-soft); }
+
+  #toolbar{
+    position:fixed; top:18px; left:18px; z-index:10;
+    display:flex; align-items:center; gap:6px;
+    background: rgba(255,253,252,0.9); backdrop-filter: blur(8px);
+    border:1px solid var(--line); border-radius: 14px; padding:6px;
+    box-shadow: 0 4px 18px rgba(90,40,55,0.08);
+  }
+  .tb-btn{
+    display:flex; align-items:center; gap:6px; border:none; background:transparent;
+    padding:8px 12px; border-radius:9px; font-family:inherit; font-size:13.5px;
+    font-weight:500; color:var(--ink); cursor:pointer;
+  }
+  .tb-btn:hover{ background:var(--pink); }
+  .tb-btn:active{ background:var(--pink-deep); }
+  .tb-btn:disabled{ opacity:0.5; cursor:default; }
+  .tb-btn.primary{ background:var(--accent); color:white; }
+  .tb-btn.primary:hover{ background:#a04861; }
+  .tb-sep{ width:1px; height:22px; background:var(--line); margin:0 2px; }
+  #editorControls{ display:none; align-items:center; gap:6px; }
+  #viewOnlyBadge{ display:none; align-items:center; gap:6px; padding:8px 12px; font-size:13px; color:var(--ink-soft); }
+  #viewOnlyBadge::before{ content:"●"; color:#b8b0b3; font-size:8px; }
+
+  #logo{
+    position:fixed; top:18px; right:18px; z-index:10;
+    font-family:'Fraunces', serif; font-size:15px; font-weight:500;
+    color:var(--ink-soft); letter-spacing:0.3px;
+    background: rgba(255,253,252,0.85); padding:8px 14px; border-radius:12px;
+    border:1px solid var(--line);
+  }
+
+  #zoomctl{
+    position:fixed; bottom:18px; right:18px; z-index:10;
+    display:flex; align-items:center; gap:2px;
+    background: rgba(255,253,252,0.9); border:1px solid var(--line);
+    border-radius: 12px; padding:4px; box-shadow: 0 4px 18px rgba(90,40,55,0.08);
+  }
+  #zoomctl button{ width:30px; height:30px; border:none; background:transparent; border-radius:8px; font-size:16px; color:var(--ink); cursor:pointer; }
+  #zoomctl button:hover{ background:var(--pink); }
+  #zoompct{ width:48px; text-align:center; font-size:12.5px; color:var(--ink-soft); }
+
+  #hint{
+    position:fixed; bottom:18px; left:18px; z-index:10;
+    font-size:12px; color:var(--ink-soft);
+    background: rgba(255,253,252,0.7); padding:7px 11px; border-radius:10px;
+    border:1px solid var(--line); max-width:300px; line-height:1.5;
+  }
+
+  #status{
+    position:fixed; top:18px; left:50%; transform:translateX(-50%) translateY(-10px);
+    z-index:20; background:var(--ink); color:white; font-size:13px;
+    padding:9px 16px; border-radius:20px; opacity:0; pointer-events:none;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+  }
+  #status.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+
+  #fileInput{ display:none; }
+</style>
+</head>
+<body>
+
+<div id="bg"></div>
+
+<div id="toolbar">
+  <div id="editorControls">
+    <button class="tb-btn" id="addTextBtn">＋ 文字</button>
+    <button class="tb-btn" id="addImgBtn">＋ 照片</button>
+    <div class="tb-sep"></div>
+    <button class="tb-btn" id="exportBtn">导出</button>
+    <button class="tb-btn" id="importBtn">导入</button>
+    <div class="tb-sep"></div>
+    <button class="tb-btn primary" id="publishBtn">发布 ↑</button>
+  </div>
+  <div id="viewOnlyBadge">只读预览</div>
+</div>
+
+<div id="logo">画布 · Canvas</div>
+
+<div id="stage">
+  <div id="world"></div>
+</div>
+
+<div id="zoomctl">
+  <button id="zoomOut">－</button>
+  <span id="zoompct">100%</span>
+  <button id="zoomIn">＋</button>
+  <button id="zoomReset" title="重置视图">⟲</button>
+</div>
+
+<div id="hint">加载中…</div>
+<div id="status"></div>
+
+<input type="file" id="fileInput" accept="image/*" multiple>
+
+<script>
+(function(){
+  const stage = document.getElementById('stage');
+  const world = document.getElementById('world');
+  const bg = document.getElementById('bg');
+  const zoompct = document.getElementById('zoompct');
+  const fileInput = document.getElementById('fileInput');
+  const hint = document.getElementById('hint');
+  const statusEl = document.getElementById('status');
+  const editorControls = document.getElementById('editorControls');
+  const viewOnlyBadge = document.getElementById('viewOnlyBadge');
+  const publishBtn = document.getElementById('publishBtn');
+
+  let EDIT_MODE = false;
+  let view = { x: 0, y: 0, scale: 1 };
+  let nodes = [];
+  let selectedId = null;
+  let idCounter = 1;
+
+  function showStatus(msg, ms){
+    statusEl.textContent = msg;
+    statusEl.classList.add('show');
+    clearTimeout(showStatus._t);
+    showStatus._t = setTimeout(()=> statusEl.classList.remove('show'), ms || 2600);
+  }
+
+  async function detectEditMode(){
+    try{
+      const res = await fetch('/api/ping', { cache:'no-store' });
+      EDIT_MODE = res.ok;
+    }catch(e){ EDIT_MODE = false; }
+    editorControls.style.display = EDIT_MODE ? 'flex' : 'none';
+    viewOnlyBadge.style.display = EDIT_MODE ? 'none' : 'flex';
+    hint.textContent = EDIT_MODE
+      ? '拖动空白处平移画布 · 滚轮缩放（Ctrl/⌘更精细）· 改完点击"发布"同步到网站'
+      : '只读预览 · 拖动平移，滚轮缩放浏览作品';
+  }
+
+  async function loadData(){
+    try{
+      const res = await fetch('data.json', { cache:'no-store' });
+      if(res.ok){
+        const data = await res.json();
+        view = data.view || view;
+        nodes = data.nodes || [];
+        idCounter = nodes.reduce((m,n)=>Math.max(m, parseInt((n.id.split('-')[1]||0))), 0) + 1;
+      }
+    }catch(e){ /* no data.json yet */ }
+  }
+
+  let saveTimer = null;
+  function scheduleSave(){
+    if(!EDIT_MODE) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(doSave, 500);
+  }
+  function doSave(){
+    if(!EDIT_MODE) return Promise.resolve();
+    return fetch('/api/save-data', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ view, nodes })
+    }).catch(()=>{});
+  }
+
+  function applyView(){
+    world.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
+    zoompct.textContent = Math.round(view.scale * 100) + '%';
+    const bx = ((view.x % 26) + 26) % 26;
+    const by = ((view.y % 26) + 26) % 26;
+    bg.style.backgroundPosition = `${bx}px ${by}px`;
+  }
+
+  function renderAll(){
+    world.innerHTML = '';
+    nodes.forEach(renderNode);
+    applyView();
+  }
+
+  function renderNode(n){
+    const el = document.createElement('div');
+    el.className = 'node ' + (n.type === 'img' ? 'img-node' : '');
+    el.style.left = n.x + 'px';
+    el.style.top = n.y + 'px';
+    if(n.w) el.style.width = n.w + 'px';
+    if(n.h) el.style.height = n.h + 'px';
+    el.dataset.id = n.id;
+    if(n.id === selectedId) el.classList.add('selected');
+
+    if(n.type === 'text'){
+      const t = document.createElement('div');
+      t.className = 'text-node';
+      if(EDIT_MODE) t.contentEditable = 'true';
+      t.setAttribute('data-placeholder', '输入文字…');
+      t.innerText = n.text || '';
+      t.style.minWidth = (n.w || 160) + 'px';
+      t.addEventListener('input', ()=>{ n.text = t.innerText; scheduleSave(); });
+      t.addEventListener('pointerdown', e=> e.stopPropagation());
+      el.appendChild(t);
+      el.style.width = 'auto';
+    } else if(n.type === 'img'){
+      const img = document.createElement('img');
+      img.src = n.src;
+      el.appendChild(img);
+      const cap = document.createElement('div');
+      cap.className = 'caption';
+      if(EDIT_MODE) cap.contentEditable = 'true';
+      cap.setAttribute('data-placeholder', '添加说明…');
+      cap.innerText = n.caption || '';
+      cap.addEventListener('input', ()=>{ n.caption = cap.innerText; scheduleSave(); });
+      cap.addEventListener('pointerdown', e=> e.stopPropagation());
+      el.appendChild(cap);
+
+      if(EDIT_MODE){
+        const handle = document.createElement('div');
+        handle.className = 'handle';
+        handle.addEventListener('pointerdown', (e)=> startResize(e, n, el));
+        el.appendChild(handle);
+      }
+    }
+
+    if(EDIT_MODE){
+      const del = document.createElement('div');
+      del.className = 'del-btn';
+      del.innerHTML = '&times;';
+      del.addEventListener('pointerdown', e=>{
+        e.stopPropagation();
+        nodes = nodes.filter(x=>x.id!==n.id);
+        selectedId = null;
+        renderAll(); scheduleSave();
+      });
+      el.appendChild(del);
+      el.addEventListener('pointerdown', (e)=> startDrag(e, n, el));
+    }
+
+    world.appendChild(el);
+  }
+
+  function select(id){
+    if(!EDIT_MODE) return;
+    selectedId = id;
+    [...world.children].forEach(el=>{
+      el.classList.toggle('selected', el.dataset.id === id);
+    });
+  }
+
+  function centerWorldPoint(){
+    const r = stage.getBoundingClientRect();
+    return { x: (r.width/2 - view.x)/view.scale, y: (r.height/2 - view.y)/view.scale };
+  }
+
+  document.getElementById('addTextBtn').addEventListener('click', ()=>{
+    const c = centerWorldPoint();
+    const n = { id:'node-'+(idCounter++), type:'text', x:c.x-80, y:c.y-16, w:160, text:'' };
+    nodes.push(n);
+    renderAll(); scheduleSave(); select(n.id);
+    const el = world.querySelector(`[data-id="${n.id}"] .text-node`);
+    if(el){ el.focus(); }
+  });
+
+  document.getElementById('addImgBtn').addEventListener('click', ()=> fileInput.click());
+  fileInput.addEventListener('change', (e)=>{
+    const files = [...e.target.files];
+    const c = centerWorldPoint();
+    let offset = 0;
+    files.forEach(file=>{
+      const reader = new FileReader();
+      reader.onload = (ev)=>{
+        const dataUrl = ev.target.result;
+        const img = new Image();
+        img.onload = async ()=>{
+          const maxW = 280;
+          const ratio = img.height / img.width;
+          const w = Math.min(maxW, img.width);
+          const h = w * ratio;
+          const x = c.x - w/2 + offset;
+          const y = c.y - h/2 + offset;
+          offset += 24;
+          try{
+            const res = await fetch('/api/save-image', {
+              method:'POST', headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({ filename: file.name, dataUrl })
+            });
+            const data = await res.json();
+            if(!data.ok) throw new Error(data.error||'保存失败');
+            const n = { id:'node-'+(idCounter++), type:'img', x, y, w, h, src:data.path, caption:'' };
+            nodes.push(n);
+            renderAll(); scheduleSave();
+          }catch(err){
+            showStatus('照片保存失败：' + err.message);
+          }
+        };
+        img.src = dataUrl;
+      };
+      reader.readAsDataURL(file);
+    });
+    fileInput.value = '';
+  });
+
+  document.getElementById('exportBtn').addEventListener('click', ()=>{
+    const blob = new Blob([JSON.stringify({view, nodes}, null, 2)], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'canvas-backup.json';
+    a.click();
+  });
+  document.getElementById('importBtn').addEventListener('click', ()=>{
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'application/json';
+    inp.onchange = ()=>{
+      const file = inp.files[0]; if(!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev)=>{
+        try{
+          const data = JSON.parse(ev.target.result);
+          view = data.view || view;
+          nodes = data.nodes || [];
+          idCounter = nodes.reduce((m,n)=>Math.max(m, parseInt(n.id.split('-')[1]||0)), 0) + 1;
+          renderAll(); scheduleSave();
+        }catch(err){ alert('文件格式不正确'); }
+      };
+      reader.readAsText(file);
+    };
+    inp.click();
+  });
+
+  publishBtn.addEventListener('click', async ()=>{
+    publishBtn.disabled = true;
+    showStatus('发布中…', 60000);
+    clearTimeout(saveTimer);
+    await doSave();
+    try{
+      const res = await fetch('/api/publish', { method:'POST' });
+      const data = await res.json();
+      if(data.ok){
+        showStatus(/没有新的改动/.test(data.message||'') ? '没有新的改动可发布' : '已发布 ✓ 网站会在约一分钟内更新');
+      }else{
+        showStatus('发布失败：' + (data.error||'').slice(0,100));
+      }
+    }catch(e){
+      showStatus('发布失败：连不上本地服务');
+    }
+    publishBtn.disabled = false;
+  });
+
+  let dragCtx = null;
+  function startDrag(e, n, el){
+    e.stopPropagation();
+    select(n.id);
+    [...world.children].forEach(c=>c.classList.remove('selected'));
+    el.classList.add('selected');
+    el.classList.add('dragging');
+    dragCtx = { n, el, startX: e.clientX, startY: e.clientY, ox: n.x, oy: n.y };
+    window.addEventListener('pointermove', onDragMove);
+    window.addEventListener('pointerup', onDragUp);
+  }
+  function onDragMove(e){
+    if(!dragCtx) return;
+    const dx = (e.clientX - dragCtx.startX) / view.scale;
+    const dy = (e.clientY - dragCtx.startY) / view.scale;
+    dragCtx.n.x = dragCtx.ox + dx;
+    dragCtx.n.y = dragCtx.oy + dy;
+    dragCtx.el.style.left = dragCtx.n.x + 'px';
+    dragCtx.el.style.top = dragCtx.n.y + 'px';
+  }
+  function onDragUp(){
+    if(dragCtx){ dragCtx.el.classList.remove('dragging'); scheduleSave(); }
+    dragCtx = null;
+    window.removeEventListener('pointermove', onDragMove);
+    window.removeEventListener('pointerup', onDragUp);
+  }
+
+  let resizeCtx = null;
+  function startResize(e, n, el){
+    e.stopPropagation(); e.preventDefault();
+    resizeCtx = { n, el, startX:e.clientX, startY:e.clientY, ow:n.w, oh:n.h };
+    window.addEventListener('pointermove', onResizeMove);
+    window.addEventListener('pointerup', onResizeUp);
+  }
+  function onResizeMove(e){
+    if(!resizeCtx) return;
+    const dx = (e.clientX - resizeCtx.startX) / view.scale;
+    const ratio = resizeCtx.oh / resizeCtx.ow;
+    const w = Math.max(60, resizeCtx.ow + dx);
+    const h = w * ratio;
+    resizeCtx.n.w = w; resizeCtx.n.h = h;
+    resizeCtx.el.style.width = w + 'px';
+    resizeCtx.el.style.height = h + 'px';
+  }
+  function onResizeUp(){
+    if(resizeCtx) scheduleSave();
+    resizeCtx = null;
+    window.removeEventListener('pointermove', onResizeMove);
+    window.removeEventListener('pointerup', onResizeUp);
+  }
+
+  let panCtx = null;
+  stage.addEventListener('pointerdown', (e)=>{
+    if(e.target !== stage && e.target !== world) return;
+    select(null);
+    [...world.children].forEach(c=>c.classList.remove('selected'));
+    panCtx = { startX:e.clientX, startY:e.clientY, ox:view.x, oy:view.y };
+    stage.classList.add('panning');
+    window.addEventListener('pointermove', onPanMove);
+    window.addEventListener('pointerup', onPanUp);
+  });
+  function onPanMove(e){
+    if(!panCtx) return;
+    view.x = panCtx.ox + (e.clientX - panCtx.startX);
+    view.y = panCtx.oy + (e.clientY - panCtx.startY);
+    applyView();
+  }
+  function onPanUp(){
+    panCtx = null;
+    stage.classList.remove('panning');
+    scheduleSave();
+    window.removeEventListener('pointermove', onPanMove);
+    window.removeEventListener('pointerup', onPanUp);
+  }
+
+  function zoomAt(clientX, clientY, factor){
+    const r = stage.getBoundingClientRect();
+    const px = clientX - r.left, py = clientY - r.top;
+    const worldX = (px - view.x) / view.scale;
+    const worldY = (py - view.y) / view.scale;
+    view.scale = Math.min(3, Math.max(0.15, view.scale * factor));
+    view.x = px - worldX * view.scale;
+    view.y = py - worldY * view.scale;
+    applyView(); scheduleSave();
+  }
+
+  stage.addEventListener('wheel', (e)=>{
+    e.preventDefault();
+    if(e.ctrlKey || e.metaKey){
+      const factor = Math.exp(-e.deltaY * 0.01);
+      zoomAt(e.clientX, e.clientY, factor);
+    } else {
+      view.x -= e.deltaX;
+      view.y -= e.deltaY;
+      applyView(); scheduleSave();
+    }
+  }, { passive:false });
+
+  document.getElementById('zoomIn').addEventListener('click', ()=>{
+    const r = stage.getBoundingClientRect();
+    zoomAt(r.width/2, r.height/2, 1.2);
+  });
+  document.getElementById('zoomOut').addEventListener('click', ()=>{
+    const r = stage.getBoundingClientRect();
+    zoomAt(r.width/2, r.height/2, 1/1.2);
+  });
+  document.getElementById('zoomReset').addEventListener('click', ()=>{
+    view = { x:0, y:0, scale:1 };
+    applyView(); scheduleSave();
+  });
+
+  window.addEventListener('keydown', (e)=>{
+    if(!EDIT_MODE) return;
+    if(document.activeElement && document.activeElement.isContentEditable) return;
+    if((e.key === 'Delete' || e.key === 'Backspace') && selectedId){
+      nodes = nodes.filter(n=>n.id!==selectedId);
+      selectedId = null;
+      renderAll(); scheduleSave();
+    }
+  });
+
+  (async function init(){
+    await detectEditMode();
+    await loadData();
+    if(nodes.length === 0 && EDIT_MODE){
+      nodes.push({ id:'node-'+(idCounter++), type:'text', x:-90, y:-40, w:220, text:'欢迎来到你的画布 ✦\n点击左上角添加照片或文字吧' });
+    }
+    renderAll();
+  })();
+})();
+</script>
+
+</body>
+</html>

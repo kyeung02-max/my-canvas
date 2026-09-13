@@ -1,0 +1,8 @@
+{
+  "name": "my-canvas",
+  "private": true,
+  "description": "无限画布 artwork documentation — 本地编辑，一键发布到 GitHub Pages",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
