@@ -87,6 +87,8 @@
   }
   .node.selected .del-btn{ display:flex; }
   .del-btn:hover{ background:#fff0f2; color:var(--accent); border-color:var(--accent-soft); }
+  .del-btn.confirm{ background:var(--accent); color:#fff; border-color:var(--accent); }
+  .del-btn.confirm:hover{ background:#a04861; }
 
   #toolbar{
     position:fixed; top:18px; left:18px; z-index:10;
@@ -307,9 +309,11 @@
       del.innerHTML = '&times;';
       del.addEventListener('pointerdown', e=>{
         e.stopPropagation();
-        nodes = nodes.filter(x=>x.id!==n.id);
-        selectedId = null;
-        renderAll(); scheduleSave();
+        if(pendingDeleteId === n.id){
+          deleteNode(n.id);
+        } else {
+          armPendingDelete(n.id, del);
+        }
       });
       el.appendChild(del);
       el.addEventListener('pointerdown', (e)=> startDrag(e, n, el));
@@ -318,8 +322,34 @@
     world.appendChild(el);
   }
 
+  let pendingDeleteId = null;
+  let pendingDeleteTimer = null;
+  function resetPendingDelete(){
+    clearTimeout(pendingDeleteTimer);
+    pendingDeleteTimer = null;
+    if(pendingDeleteId){
+      const btn = world.querySelector(`[data-id="${pendingDeleteId}"] .del-btn`);
+      if(btn){ btn.classList.remove('confirm'); btn.innerHTML = '&times;'; }
+    }
+    pendingDeleteId = null;
+  }
+  function armPendingDelete(id, btn){
+    resetPendingDelete();
+    pendingDeleteId = id;
+    if(btn){ btn.classList.add('confirm'); btn.innerHTML = '&check;'; }
+    pendingDeleteTimer = setTimeout(resetPendingDelete, 3000);
+  }
+  function deleteNode(id){
+    nodes = nodes.filter(x=>x.id!==id);
+    if(selectedId===id) selectedId = null;
+    pendingDeleteId = null;
+    clearTimeout(pendingDeleteTimer);
+    renderAll(); scheduleSave();
+  }
+
   function select(id){
     if(!EDIT_MODE) return;
+    resetPendingDelete();
     selectedId = id;
     [...world.children].forEach(el=>{
       el.classList.toggle('selected', el.dataset.id === id);
@@ -340,41 +370,72 @@
     if(el){ el.focus(); }
   });
 
+  const MAX_IMAGE_DIM = 4000; // 超过这个长边才压缩，绝大多数照片不会被触碰
+  const JPEG_QUALITY = 0.92;
+
+  function readFileAsDataURL(file){
+    return new Promise((resolve, reject)=>{
+      const reader = new FileReader();
+      reader.onload = ()=> resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+  function loadImage(dataUrl){
+    return new Promise((resolve, reject)=>{
+      const img = new Image();
+      img.onload = ()=> resolve(img);
+      img.onerror = reject;
+      img.src = dataUrl;
+    });
+  }
+  // 大图按长边缩到 MAX_IMAGE_DIM 再重新编码；未超限的图原样保留，不重新编码，
+  // 画布上拖拽调整显示大小只是 CSS 缩放，不会再次触及原图数据。
+  async function processImageFile(file){
+    const originalDataUrl = await readFileAsDataURL(file);
+    const img = await loadImage(originalDataUrl);
+    const longEdge = Math.max(img.width, img.height);
+    if(longEdge <= MAX_IMAGE_DIM){
+      return { dataUrl: originalDataUrl, width: img.width, height: img.height };
+    }
+    const scale = MAX_IMAGE_DIM / longEdge;
+    const w = Math.round(img.width * scale);
+    const h = Math.round(img.height * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+    const isPng = /image\/png/i.test(file.type);
+    const dataUrl = isPng ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', JPEG_QUALITY);
+    return { dataUrl, width: w, height: h };
+  }
+
   document.getElementById('addImgBtn').addEventListener('click', ()=> fileInput.click());
   fileInput.addEventListener('change', (e)=>{
     const files = [...e.target.files];
     const c = centerWorldPoint();
     let offset = 0;
-    files.forEach(file=>{
-      const reader = new FileReader();
-      reader.onload = (ev)=>{
-        const dataUrl = ev.target.result;
-        const img = new Image();
-        img.onload = async ()=>{
-          const maxW = 280;
-          const ratio = img.height / img.width;
-          const w = Math.min(maxW, img.width);
-          const h = w * ratio;
-          const x = c.x - w/2 + offset;
-          const y = c.y - h/2 + offset;
-          offset += 24;
-          try{
-            const res = await fetch('/api/save-image', {
-              method:'POST', headers:{'Content-Type':'application/json'},
-              body: JSON.stringify({ filename: file.name, dataUrl })
-            });
-            const data = await res.json();
-            if(!data.ok) throw new Error(data.error||'保存失败');
-            const n = { id:'node-'+(idCounter++), type:'img', x, y, w, h, src:data.path, caption:'' };
-            nodes.push(n);
-            renderAll(); scheduleSave();
-          }catch(err){
-            showStatus('照片保存失败：' + err.message);
-          }
-        };
-        img.src = dataUrl;
-      };
-      reader.readAsDataURL(file);
+    files.forEach(async (file)=>{
+      try{
+        const { dataUrl, width, height } = await processImageFile(file);
+        const maxW = 280;
+        const ratio = height / width;
+        const w = Math.min(maxW, width);
+        const h = w * ratio;
+        const x = c.x - w/2 + offset;
+        const y = c.y - h/2 + offset;
+        offset += 24;
+        const res = await fetch('/api/save-image', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ filename: file.name, dataUrl })
+        });
+        const data = await res.json();
+        if(!data.ok) throw new Error(data.error||'保存失败');
+        const n = { id:'node-'+(idCounter++), type:'img', x, y, w, h, src:data.path, caption:'' };
+        nodes.push(n);
+        renderAll(); scheduleSave();
+      }catch(err){
+        showStatus('照片保存失败：' + (err.message||err));
+      }
     });
     fileInput.value = '';
   });
@@ -540,9 +601,13 @@
     if(!EDIT_MODE) return;
     if(document.activeElement && document.activeElement.isContentEditable) return;
     if((e.key === 'Delete' || e.key === 'Backspace') && selectedId){
-      nodes = nodes.filter(n=>n.id!==selectedId);
-      selectedId = null;
-      renderAll(); scheduleSave();
+      if(pendingDeleteId === selectedId){
+        deleteNode(selectedId);
+      } else {
+        const btn = world.querySelector(`[data-id="${selectedId}"] .del-btn`);
+        armPendingDelete(selectedId, btn);
+        showStatus('再按一次 Delete/Backspace 确认删除', 3000);
+      }
     }
   });
 

@@ -39,6 +39,23 @@ function send(res, code, data, headers = {}) {
   res.end(data);
 }
 
+// 发布前清理孤儿图片：data.json 里已经不再引用的文件，不该被提交进 git
+function pruneOrphanedImages() {
+  try {
+    const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    const referenced = new Set(
+      (data.nodes || [])
+        .filter((n) => n.type === 'img' && n.src)
+        .map((n) => path.basename(n.src))
+    );
+    for (const f of fs.readdirSync(IMAGES_DIR)) {
+      if (!referenced.has(f)) fs.unlinkSync(path.join(IMAGES_DIR, f));
+    }
+  } catch (e) {
+    // data.json 缺失/损坏时跳过清理，不影响发布
+  }
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -84,6 +101,7 @@ const server = http.createServer(async (req, res) => {
 
   // ---------------- API：一键发布（git add + commit + push） ----------------
   if (url.pathname === '/api/publish' && req.method === 'POST') {
+    pruneOrphanedImages();
     exec('git add -A && git commit -m "update canvas content" && git push', { cwd: ROOT }, (err, stdout, stderr) => {
       if (err) {
         const msg = (stderr || err.message || '').trim();
@@ -116,6 +134,6 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`\n画布本地服务已启动 → http://localhost:${PORT}\n（在这里编辑，完成后点网页上的“发布”按钮同步到 GitHub）\n`);
 });
